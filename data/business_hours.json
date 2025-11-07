@@ -1,0 +1,4 @@
+{
+  "default": { "days": ["Mon","Tue","Wed","Thu","Fri","Sat"], "start": "09:00", "end": "19:00" },
+  "Carlos":  { "days": ["Mon","Tue","Wed","Thu","Fri"], "start": "10:00", "end": "18:00" }
+}
