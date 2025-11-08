@@ -1,10 +1,10 @@
-const { google } = require('googleapis');
-const { DateTime } = require('luxon');
-const path = require('path');
-const fs = require('fs');
+import { google } from 'googleapis';
+import { DateTime } from 'luxon';
+import path from 'path';
+import fs from 'fs';
 
-const cache = require('../utils/cache');
-const logger = require('../utils/logger');
+import cache from '../utils/cache.js';
+import { logger } from '../utils/logger.js';
 
 // -------------------- ENV --------------------
 const TZ = process.env.TIMEZONE || 'America/Bogota';
@@ -15,7 +15,7 @@ const BARBERS_JSON_PATH = process.env.BARBERS_JSON || path.join(process.cwd(), '
 function getAuthClient() {
   const keyfile = process.env.GOOGLE_SA_KEYFILE;
   const jsonInline = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-  const b64 = process.env.GOOGLE_SA_JSON_BASE64; // opcional
+  const b64 = process.env.GOOGLE_SA_JSON_BASE64; // optional
 
   let credentials;
 
@@ -27,24 +27,21 @@ function getAuthClient() {
     } else if (b64) {
       credentials = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
     } else {
-      const err = new Error('MISSING_GOOGLE_SA: Define GOOGLE_APPLICATION_CREDENTIALS_JSON o GOOGLE_SA_KEYFILE');
+      const err = new Error('MISSING_GOOGLE_SA: Define GOOGLE_APPLICATION_CREDENTIALS_JSON or GOOGLE_SA_KEYFILE');
       err.code = 'MISSING_GOOGLE_SA';
       throw err;
     }
   } catch (err) {
-    // Evitar loggear credenciales completas
     logger.error?.('GOOGLE_SA_PARSE_ERROR', { message: err.message });
     throw err;
   }
 
-  // Validar campos necesarios
   if (!credentials || !credentials.client_email || !credentials.private_key) {
     const err = new Error('INVALID_GOOGLE_SA: missing client_email or private_key in credentials');
     err.code = 'INVALID_GOOGLE_SA';
     throw err;
   }
 
-  // Normalizar newlines si la private_key vino por env var (ej. "\n")
   const privateKey = credentials.private_key.replace(/\\n/g, '\n');
 
   return new google.auth.JWT({
@@ -62,7 +59,6 @@ function loadBarbersMap() {
     if (!raw) return {};
     return JSON.parse(raw);
   } catch (e) {
-    // No loggear todo el error para evitar filtrar datos sensibles
     logger.error?.('BARBERS_JSON_READ_ERROR', { message: e.message });
     return {};
   }
@@ -89,14 +85,12 @@ function resolveCalendarId(params) {
 
 function ensureFuture(whenISO) {
   const now = DateTime.now().setZone(TZ);
-  // Parsear directamente en la zona configurada para evitar interpretaciones indeseadas
   const dt = DateTime.fromISO(whenISO, { zone: TZ });
   if (!dt.isValid) {
     const err = new Error(`INVALID_WHEN: ${whenISO}`);
     err.code = 'INVALID_WHEN';
     throw err;
   }
-  // Rechazar tiempos en el pasado o iguales a "ahora"
   if (dt <= now) {
     const err = new Error('IN_PAST');
     err.code = 'IN_PAST';
@@ -106,43 +100,28 @@ function ensureFuture(whenISO) {
 }
 
 function toRFC3339(dt) {
-  // Luxon toISO incluye offset por defecto; suprimir ms para una cadena más limpia
   return dt.setZone(TZ).toISO({ suppressMilliseconds: true });
 }
 
 async function withIdempotency(key, fn) {
-  const cached = await cache.get(key);
+  const cached = await Promise.resolve(cache.get(key));
   if (cached) return cached;
-
-  // Nota: si tu cache tiene un "set if not exists" (SETNX) es mejor usarlo para evitar race conditions.
   const result = await fn();
-  // guarda 24h — confirmar la unidad (minutos/segundos) en tu implementación de cache
-  await cache.set(key, result, 24 * 60);
+  // cache.set expects TTL in seconds in our adapter
+  await Promise.resolve(cache.set(key, result, 24 * 60 * 60)); // 24h in seconds
   return result;
 }
 
 // -------------------- CORE OPS --------------------
 async function createEvent(params) {
-  // params: { when: ISO, who: string, notes?: string, duration?: number, barber?: string, calendarId?: string, client_request_id?: string }
-  const {
-    when,
-    who,
-    notes = '',
-    duration,
-    barber,
-    calendarId: explicitCalId,
-    client_request_id,
-  } = params || {};
+  const { when, who, notes = '', duration, barber, calendarId: explicitCalId, client_request_id } = params || {};
 
   if (!when) throw new Error('Missing param: when');
   if (!who) throw new Error('Missing param: who');
 
   const calId = resolveCalendarId({ calendarId: explicitCalId, barber });
-
-  // duración por defecto (validar numericidad de forma explícita)
   const durMin = Number.isFinite(Number(duration)) ? Number(duration) : DEFAULT_DURATION_MIN;
 
-  // Validar 'when' y construir start/end según TZ
   const startDT = ensureFuture(when);
   const endDT = startDT.plus({ minutes: durMin });
 
@@ -186,21 +165,12 @@ async function createEvent(params) {
       err.code = 'GOOGLE_403_FORBIDDEN';
       throw err;
     }
-    // deja rastro útil pero evita exponer secretos
-    logger.error?.('CALENDAR_CREATE_ERROR', {
-      calId,
-      who,
-      when,
-      code: e?.code,
-      status,
-      message: e?.message,
-    });
+    logger.error?.('CALENDAR_CREATE_ERROR', { calId, who, when, code: e?.code, status, message: e?.message });
     throw e;
   }
 }
 
 async function cancelEvent(params) {
-  // params: { eventId: string, calendarId?: string, barber?: string }
   const { eventId, calendarId: explicitCalId, barber } = params || {};
   if (!eventId) throw new Error('Missing param: eventId');
 
@@ -230,17 +200,14 @@ async function cancelEvent(params) {
 }
 
 // -------------------- DISPATCHER --------------------
-module.exports = {
-  name: 'calendar',
-  actions: {
-    // tool="calendar"; action="create" | "cancel"
-    async create({ params }) {
-      const data = await createEvent(params);
-      return { ok: true, data };
-    },
-    async cancel({ params }) {
-      const data = await cancelEvent(params);
-      return { ok: true, data };
-    },
+export const name = 'calendar';
+export const actions = {
+  async create({ params }) {
+    const data = await createEvent(params);
+    return { ok: true, data };
+  },
+  async cancel({ params }) {
+    const data = await cancelEvent(params);
+    return { ok: true, data };
   },
 };
