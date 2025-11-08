@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "set NODE_ENV=production&& node src/server.js"
+    "start": "NODE_ENV=production node -r dotenv/config src/server.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",
@@ -17,9 +17,6 @@
     "uuid": "^9.0.1"
   },
   "description": "",
-  "main": "index.js",
-  "devDependencies": {},
-  "keywords": [],
-  "author": "",
+  "main": "src/server.js",
   "license": "ISC"
 }
