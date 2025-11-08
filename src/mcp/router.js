@@ -134,24 +134,38 @@ mcpRouter.post('/', async (req, res) => {
     return res.json({ status: 'ok', data: { pong: true, now_bogota: nowISO() } });
   }
 
-  const mod = registry[tool];
-  if (!mod) return res.status(404).json({ status: 'error', message: `Tool desconocida: ${tool}` });
+  // --- RESOLUCIÓN DE TOOL + ACTION (reemplaza tu bloque desde aquí) ---
+const mod = registry[tool];
+if (!mod) {
+  return res.status(404).json({ status: 'error', message: `Tool desconocida: ${tool}` });
+}
 
-  // Compat: support mod.actions[action] or mod[action]
-  let handler = null;
-  if (mod.actions && typeof mod.actions[action] === 'function') {
-    const fn = mod.actions[action];
-    handler = async ({ params: p, meta } = {}) => fn({ params: p, meta });
-  } else if (typeof mod[action] === 'function') {
-    const fn = mod[action];
-    handler = async ({ params: p, meta } = {}) => {
-      try {
-        return await fn({ params: p, meta });
-      } catch (e) {
-        return await fn(p);
-      }
-    };
-  }
+// Soporta ambas formas: actions.create/cancel O funciones directas en el módulo
+const handler =
+  (mod.actions && typeof mod.actions[action] === 'function')
+    ? (p) => mod.actions[action]({ params: p })   // calendar.js exporta { actions:{ create, cancel } }
+    : (typeof mod[action] === 'function' ? mod[action] : null); // otras tools con export directo
+
+if (!handler) {
+  return res.status(404).json({ status: 'error', message: `Acción desconocida: ${action}` });
+}
+
+try {
+  const data = await handler(params);
+  // Normaliza la respuesta: si la tool devuelve { ok:true, data }, extrae data; si no, devuelve tal cual.
+  const payload = (data && data.ok === true && data.data) ? data.data : data;
+  return res.json({ status: 'ok', message: 'OK', data: payload });
+} catch (err) {
+  // Mapeo de errores semánticos (opcional pero recomendado)
+  const code = err.code;
+  const http =
+    code === 'EVENT_NOT_FOUND' || code === 'BARBER_NOT_FOUND' || code === 'MISSING_CALENDAR' ? 404 :
+    code === 'INVALID_WHEN' || code === 'IN_PAST' || code === 'GOOGLE_403_FORBIDDEN' ? 400 :
+    500;
+
+  logger?.error?.({ err, tool, action }, 'mcp.tool_error');
+  return res.status(http).json({ status: 'error', code, message: err.message || 'Error' });
+}
 
   if (typeof handler !== 'function') return res.status(404).json({ status: 'error', message: `Acción desconocida: ${action}` });
 
