@@ -57,12 +57,23 @@ function loadBarbersMap() {
     if (!fs.existsSync(BARBERS_JSON_PATH)) return {};
     const raw = fs.readFileSync(BARBERS_JSON_PATH, 'utf8').trim();
     if (!raw) return {};
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+
+    // ✅ Soporta array [{name, calendarId}] y objeto {name: calendarId}
+    if (Array.isArray(parsed)) {
+      const obj = {};
+      for (const it of parsed) {
+        if (it && it.name && it.calendarId) obj[it.name] = it.calendarId;
+      }
+      return obj;
+    }
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (e) {
     logger.error?.('BARBERS_JSON_READ_ERROR', { message: e.message });
     return {};
   }
 }
+
 
 function resolveCalendarId(params) {
   const { calendarId, barber } = params || {};
