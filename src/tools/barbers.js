@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { logger } from '../utils/logger.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('barbers');
 
 const BARBERS_JSON_PATH =
   process.env.BARBERS_JSON || path.join(process.cwd(), 'data', 'barbers.json');
@@ -15,7 +17,7 @@ function loadBarbers() {
 
   try {
     if (!fs.existsSync(BARBERS_JSON_PATH)) {
-      logger.error?.('BARBERS_JSON_NOT_FOUND', { path: BARBERS_JSON_PATH });
+      log.error({ path: BARBERS_JSON_PATH }, 'BARBERS_JSON_NOT_FOUND');
       barbersCache = {};
       return barbersCache;
     }
@@ -24,17 +26,20 @@ function loadBarbers() {
     const parsed = JSON.parse(raw);
 
     if (!parsed || typeof parsed !== 'object') {
-      logger.error?.('BARBERS_JSON_INVALID');
+      log.error({}, 'BARBERS_JSON_INVALID');
       barbersCache = {};
       return barbersCache;
     }
 
     barbersCache = parsed;
   } catch (err) {
-    logger.error?.('BARBERS_JSON_LOAD_ERROR', {
-      message: err.message,
-      stack: err.stack,
-    });
+    log.error(
+      {
+        message: err.message,
+        stack: err.stack,
+      },
+      'BARBERS_JSON_LOAD_ERROR'
+    );
     barbersCache = {};
   }
 
@@ -43,19 +48,22 @@ function loadBarbers() {
 
 /**
  * Normaliza texto para comparación
+ * (NO tocamos esta lógica)
  */
 function normalize(str) {
   return String(str || '')
     .toLowerCase()
     // quita caracteres de reemplazo '�' que aparecen por problemas de encoding
     .replace(/\uFFFD/g, '')
-    .normalize('NFD')          // quita tildes
-    .replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFD')          // separa letra + tilde
+    .replace(/[\u0300-\u036f]/g, '') // quita tildes
     .replace(/\s+/g, ' ')      // colapsa espacios múltiples
     .trim();
 }
+
 /**
  * Distancia de Levenshtein simple para permitir 1 error
+ * (NO tocamos esta lógica)
  */
 function levenshtein(a, b) {
   const s = a || '';
@@ -78,9 +86,9 @@ function levenshtein(a, b) {
         dp[j] = prev;
       } else {
         dp[j] = Math.min(
-          prev + 1,   // sustitución
-          dp[j] + 1,  // borrado
-          dp[j - 1] + 1 // inserción
+          prev + 1,      // sustitución
+          dp[j] + 1,     // borrado
+          dp[j - 1] + 1  // inserción
         );
       }
       prev = temp;
@@ -92,6 +100,7 @@ function levenshtein(a, b) {
 
 /**
  * Comparación "suave": exacto, substring o distancia <= 1
+ * (NO tocamos esta lógica)
  */
 function looseMatch(a, b) {
   if (!a || !b) return false;
@@ -101,7 +110,6 @@ function looseMatch(a, b) {
   const dist = levenshtein(a, b);
   return dist <= 1;
 }
-
 
 /**
  * Resolver barbero:
@@ -115,13 +123,15 @@ async function resolveBarber(params) {
   const name = params?.name;
 
   if (!name) {
-    return {
+    const resp = {
       ok: false,
       error: {
         code: 'BARBER_PARAM_MISSING',
         message: 'Debe proporcionar un nombre.',
       },
     };
+    log.warn({ params }, 'BARBER_PARAM_MISSING');
+    return resp;
   }
 
   const inputN = normalize(name);
@@ -133,7 +143,7 @@ async function resolveBarber(params) {
   for (const barberId of Object.keys(barbers)) {
     const cfg = barbers[barberId];
 
-        const display = normalize(cfg.displayName);
+    const display = normalize(cfg.displayName);
     const aliases = Array.isArray(cfg.aliases)
       ? cfg.aliases.map((a) => normalize(a))
       : [];
@@ -150,7 +160,6 @@ async function resolveBarber(params) {
       continue;
     }
 
-
     // 3) coincide con ID interno → error especial
     if (inputN === normalize(barberId)) {
       internalIdMatch = barberId;
@@ -159,7 +168,7 @@ async function resolveBarber(params) {
 
   // ⚠ Si coincide con ID interno pero NO con nombre visible → error
   if (internalIdMatch && matches.length === 0) {
-    return {
+    const resp = {
       ok: false,
       error: {
         code: 'BARBER_INTERNAL_ID_USED',
@@ -167,22 +176,26 @@ async function resolveBarber(params) {
         internal_id: internalIdMatch,
       },
     };
+    log.warn({ name, internalIdMatch }, 'BARBER_INTERNAL_ID_USED');
+    return resp;
   }
 
   // 0 coincidencias
   if (matches.length === 0) {
-    return {
+    const resp = {
       ok: false,
       error: {
         code: 'BARBER_NOT_FOUND',
         message: `No se encontró ningún barbero llamado "${name}".`,
       },
     };
+    log.warn({ name }, 'BARBER_NOT_FOUND');
+    return resp;
   }
 
   // Más de una coincidencia → ambiguo
   if (matches.length > 1) {
-    return {
+    const resp = {
       ok: false,
       error: {
         code: 'BARBER_AMBIGUOUS',
@@ -190,13 +203,18 @@ async function resolveBarber(params) {
         options: matches,
       },
     };
+    log.warn({ name, options: matches }, 'BARBER_AMBIGUOUS');
+    return resp;
   }
 
   // Coincidencia única → OK
-  return {
+  const resp = {
     ok: true,
     data: matches[0],
   };
+
+  log.info({ name, resolved: matches[0] }, 'BARBER_RESOLVED_OK');
+  return resp;
 }
 
 export const name = 'barbers';

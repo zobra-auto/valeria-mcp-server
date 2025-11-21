@@ -4,7 +4,9 @@ import path from 'path';
 import fs from 'fs';
 
 import cache from '../utils/cache.js';
-import { logger } from '../utils/logger.js';
+// Logger PRO
+import { logger, createRequestLogger, timeAsync, logWithDuration } from '../utils/logger.js';
+
 
 // -------------------- ENV --------------------
 const TZ = process.env.TIMEZONE || 'America/Bogota';
@@ -337,97 +339,145 @@ async function withIdempotency(key, fn) {
 
 // -------------------- CORE OPS --------------------
 async function createEvent(params) {
+  const log = createRequestLogger({
+    tool: 'calendar',
+    action: 'create',
+    barber: params?.barber,
+  });
+
+  const startLog = Date.now();
+  log.info({ params }, 'calendar.create → inicio');
+
   const { when, who, notes = '', duration, barber, calendarId: explicitCalId, client_request_id } = params || {};
 
   if (!when) throw new Error('Missing param: when');
   if (!who) throw new Error('Missing param: who');
 
   const calId = resolveCalendarId({ calendarId: explicitCalId, barber });
+  log.info({ calId }, 'calendar.create → usando calendarId');
+
   const durMin = Number.isFinite(Number(duration)) ? Number(duration) : DEFAULT_DURATION_MIN;
 
   const startDT = ensureFuture(when);
   const endDT = startDT.plus({ minutes: durMin });
-
   const summary = `Cita con ${who}`;
   const description = notes || '';
 
   const exec = async () => {
-    const auth = getAuthClient();
-    const calendar = google.calendar({ version: 'v3', auth });
+    return await timeAsync(log, 'Google Calendar → insert event', async () => {
+      const auth = getAuthClient();
+      const calendar = google.calendar({ version: 'v3', auth });
 
-    const res = await calendar.events.insert({
-      calendarId: calId,
-      requestBody: {
-        summary,
-        description,
-        start: { dateTime: toRFC3339(startDT), timeZone: TZ },
-        end: { dateTime: toRFC3339(endDT), timeZone: TZ },
-      },
+      const res = await calendar.events.insert({
+        calendarId: calId,
+        requestBody: {
+          summary,
+          description,
+          start: { dateTime: toRFC3339(startDT), timeZone: TZ },
+          end: { dateTime: toRFC3339(endDT), timeZone: TZ },
+        },
+      });
+
+      const ev = res.data || {};
+      return {
+        id: ev.id,
+        when: toRFC3339(startDT),
+        start: ev.start?.dateTime || toRFC3339(startDT),
+        end: ev.end?.dateTime || toRFC3339(endDT),
+        who,
+        notes: description,
+      };
     });
-
-    const ev = res.data || {};
-    return {
-      id: ev.id,
-      when: toRFC3339(startDT),
-      start: ev.start?.dateTime || toRFC3339(startDT),
-      end: ev.end?.dateTime || toRFC3339(endDT),
-      who,
-      notes: description,
-    };
   };
 
   try {
-    if (client_request_id) {
-      return await withIdempotency(`calendar:create:${client_request_id}`, exec);
-    }
-    return await exec();
+    const result = client_request_id
+      ? await withIdempotency(`calendar:create:${client_request_id}`, exec)
+      : await exec();
+
+    logWithDuration(log, 'calendar.create → completado', { id: result.id }, startLog);
+    return result;
   } catch (e) {
-    const status = e?.response?.status || e?.statusCode || e?.code;
-    if (status === 403) {
-      const err = new Error('GOOGLE_403_FORBIDDEN: comparte el calendario con la Service Account (permiso writer).');
-      err.code = 'GOOGLE_403_FORBIDDEN';
-      throw err;
-    }
-    logger.error?.('CALENDAR_CREATE_ERROR', { calId, who, when, code: e?.code, status, message: e?.message });
+    log.error(
+      {
+        err: { message: e.message, code: e.code },
+        calId,
+        params,
+      },
+      'calendar.create → ERROR'
+    );
     throw e;
   }
 }
 
+
 async function cancelEvent(params) {
+  const log = createRequestLogger({
+    tool: 'calendar',
+    action: 'cancel',
+    barber: params?.barber,
+  });
+
+  const startLog = Date.now();
+  log.info({ params }, 'calendar.cancel → inicio');
+
   const { eventId, calendarId: explicitCalId, barber } = params || {};
   if (!eventId) throw new Error('Missing param: eventId');
 
   const calId = resolveCalendarId({ calendarId: explicitCalId, barber });
 
   try {
-    const auth = getAuthClient();
-    const calendar = google.calendar({ version: 'v3', auth });
-    await calendar.events.delete({ calendarId: calId, eventId });
+    await timeAsync(log, 'Google Calendar → delete event', async () => {
+      const auth = getAuthClient();
+      const calendar = google.calendar({ version: 'v3', auth });
 
+      await calendar.events.delete({ calendarId: calId, eventId });
+    });
+
+    logWithDuration(log, 'calendar.cancel → completado', { eventId }, startLog);
     return { id: eventId, cancelled: true };
   } catch (e) {
     const status = e?.response?.status || e?.statusCode || e?.code;
-    if (status === 404) {
-      const err = new Error('EVENT_NOT_FOUND');
-      err.code = 'EVENT_NOT_FOUND';
-      throw err;
-    }
-    if (status === 403) {
-      const err = new Error('GOOGLE_403_FORBIDDEN: la Service Account no tiene permisos sobre este calendario.');
-      err.code = 'GOOGLE_403_FORBIDDEN';
-      throw err;
-    }
-    logger.error?.('CALENDAR_CANCEL_ERROR', { calId, eventId, code: e?.code, status, message: e?.message });
+
+    log.error(
+      {
+        err: { message: e.message, code: e.code, status },
+        calId,
+        eventId,
+      },
+      'calendar.cancel → ERROR'
+    );
+
+    if (status === 404) throw Object.assign(new Error('EVENT_NOT_FOUND'), { code: 'EVENT_NOT_FOUND' });
+    if (status === 403)
+      throw Object.assign(
+        new Error('GOOGLE_403_FORBIDDEN: la SA no tiene permiso.'),
+        { code: 'GOOGLE_403_FORBIDDEN' }
+      );
+
     throw e;
   }
 }
 
+
 async function checkAvailability(params) {
+  // 🔹 Logger hijo para esta operación
+  const log = createRequestLogger({
+    tool: 'calendar',
+    action: 'check',
+    barber: params?.barber,
+  });
+
+  const startLog = Date.now();
+  log.info({ params }, 'calendar.check → inicio');
+
   const { from, to, duration, buffer = 0, barber, calendarId: explicitCalId } = params || {};
 
+  // --------- Validación de rango ---------
   if (!from || !to) {
     const err = new Error('INVALID_RANGE: from y to son requeridos');
     err.code = 'INVALID_RANGE';
+    log.error({ err: { message: err.message, code: err.code } }, 'calendar.check → rango faltante');
     throw err;
   }
 
@@ -437,6 +487,14 @@ async function checkAvailability(params) {
   if (!fromDT.isValid || !toDT.isValid || toDT <= fromDT) {
     const err = new Error('INVALID_RANGE: rango inválido');
     err.code = 'INVALID_RANGE';
+    log.error(
+      {
+        err: { message: err.message, code: err.code },
+        from,
+        to,
+      },
+      'calendar.check → rango inválido'
+    );
     throw err;
   }
 
@@ -444,6 +502,7 @@ async function checkAvailability(params) {
   const bufferMin = Number(buffer) || 0;
 
   const calId = resolveCalendarId({ calendarId: explicitCalId, barber });
+  log.info({ calId, durMin, bufferMin }, 'calendar.check → usando calendarId');
 
   // --------- Caché determinista ---------
   const cacheKey = [
@@ -457,7 +516,12 @@ async function checkAvailability(params) {
   ].join('|');
 
   const cached = await Promise.resolve(cache.get(cacheKey));
-  if (cached) return cached;
+  if (cached) {
+    log.info({ cacheKey }, 'calendar.check → CACHE HIT');
+    return cached;
+  }
+
+  log.info({ cacheKey }, 'calendar.check → CACHE MISS');
 
   // --------- Leer eventos ocupados reales ---------
   const auth = getAuthClient();
@@ -484,6 +548,8 @@ async function checkAvailability(params) {
       };
     })
     .filter(Boolean);
+
+  log.info({ busy_count: busy.length }, 'calendar.check → eventos ocupados obtenidos');
 
   // --------- Business hours ---------
   const bizCfg = getBizFor(barber);
@@ -548,8 +614,11 @@ async function checkAvailability(params) {
   };
 
   await Promise.resolve(cache.set(cacheKey, result, CACHE_TTL_SECONDS));
+  logWithDuration(log, 'calendar.check → completado', { slots: result.slots.length }, startLog);
+
   return result;
 }
+
 
 
 // -------------------- DISPATCHER --------------------
