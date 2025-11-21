@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import logger from '../utils/logger.js';
+import { logger } from '../utils/logger.js';
 
 const BARBERS_JSON_PATH =
   process.env.BARBERS_JSON || path.join(process.cwd(), 'data', 'barbers.json');
