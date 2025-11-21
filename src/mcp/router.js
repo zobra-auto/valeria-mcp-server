@@ -9,6 +9,8 @@ import * as docs from '../tools/docs.js';
 import * as availability from '../tools/availability.js';
 import * as notifier from '../tools/notifier.js';
 import cache from '../utils/cache.js';
+import * as barbers from '../tools/barbers.js';
+
 
 const ajv = new Ajv({ removeAdditional: true, allErrors: true });
 const schema = {
@@ -28,6 +30,7 @@ const registry = {
   docs,
   ver_disponibilidad: availability,
   notificador: notifier,
+  barbers,
 };
 
 export const mcpRouter = express.Router();

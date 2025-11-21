@@ -1,1 +1,33 @@
-[  { "name": "Carlos", "calendarId": "57c964ddd9b775273813cfb65e1f4d2dc5a6b2d3c48c143d852077740967cd89@group.calendar.google.com" },  { "name": "Alejandro", "calendarId": "6502c2b5f11bc8b8c16bee3901ffb8402fec69193bce02f6f1e10e2e97fab5d5@group.calendar.google.com" }]
+{
+  "nova": {
+    "displayName": "Juan",
+    "aliases": ["juan", "juan corte", "juan el rápido"],
+    "calendarId": "zobra.auto@gmail.com"
+  },
+  "atlas": {
+    "displayName": "Carlos",
+    "aliases": ["carlos", "carlitos", "carlos barbero"],
+    "calendarId": "57c964ddd9b775273813cfb65e1f4d2dc5a6b2d3c48c143d852077740967cd89@group.calendar.google.com"
+  },
+  "shadow": {
+    "displayName": "Miguel",
+    "aliases": ["miguel", "mike", "migue"],
+    "calendarId": "6502c2b5f11bc8b8c16bee3901ffb8402fec69193bce02f6f1e10e2e97fab5d5@group.calendar.google.com"
+  },
+  "blaze": {
+    "displayName": "Andrés",
+    "aliases": ["andres", "andrés", "andres barber"],
+    "calendarId": "43c4a0f8c31f5d8f28b94af2c5f25859e6046a513c8e9fec96162acb25e9d3ba@group.calendar.google.com"
+  },
+  "orbit": {
+    "displayName": "Laura",
+    "aliases": ["laura", "lau", "laura barber"],
+    "calendarId": "1dc13a10db3546de0acea8651657d4de3f2126cf78362b1feba5ecda867df252@group.calendar.google.com"
+  },
+  "delta": {
+    "displayName": "Santiago",
+    "aliases": ["santiago", "santi", "santi barber"],
+    "calendarId": "2e8f6a395070749ee2c8b80f3f55f30b1557681b364e51499b98db3114c29326@group.calendar.google.com"
+  }
+}
+

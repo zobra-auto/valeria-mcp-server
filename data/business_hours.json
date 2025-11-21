@@ -1,4 +1,10 @@
 {
   "default": { "days": ["Mon","Tue","Wed","Thu","Fri","Sat"], "start": "09:00", "end": "19:00" },
-  "Carlos":  { "days": ["Mon","Tue","Wed","Thu","Fri"], "start": "10:00", "end": "18:00" }
+
+  "nova":   { "days": ["Mon","Tue","Wed","Thu","Fri"], "start": "10:00", "end": "18:00" },
+  "atlas":  { "days": ["Mon","Tue","Wed","Thu","Fri"], "start": "09:00", "end": "17:00" },
+  "shadow": { "days": ["Tue","Wed","Thu","Fri","Sat"], "start": "11:00", "end": "20:00" },
+  "blaze":  { "days": ["Mon","Wed","Fri","Sat"],        "start": "08:00", "end": "16:00" },
+  "orbit":  { "days": ["Mon","Tue","Thu","Sat"],        "start": "12:00", "end": "20:00" },
+  "delta":  { "days": ["Mon","Tue","Wed","Thu","Fri"],  "start": "09:00", "end": "19:00" }
 }

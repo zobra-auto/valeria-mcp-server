@@ -10,6 +10,11 @@ import { logger } from '../utils/logger.js';
 const TZ = process.env.TIMEZONE || 'America/Bogota';
 const DEFAULT_DURATION_MIN = Number(process.env.DEFAULT_SLOT_MINUTES || 30);
 const BARBERS_JSON_PATH = process.env.BARBERS_JSON || path.join(process.cwd(), 'data', 'barbers.json');
+const BUSINESS_HOURS_JSON_PATH =
+  process.env.BUSINESS_HOURS_JSON || path.join(process.cwd(), 'data', 'business_hours.json');
+
+const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 120);
+
 
 // -------------------- AUTH (Service Account) --------------------
 function getAuthClient() {
@@ -59,7 +64,7 @@ function loadBarbersMap() {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
 
-    // ✅ Soporta array [{name, calendarId}] y objeto {name: calendarId}
+    // 1) Formato array [{ name, calendarId }]
     if (Array.isArray(parsed)) {
       const obj = {};
       for (const it of parsed) {
@@ -67,11 +72,218 @@ function loadBarbersMap() {
       }
       return obj;
     }
-    return parsed && typeof parsed === 'object' ? parsed : {};
+
+    // 2) Formato objeto con calendarId dentro
+    if (parsed && typeof parsed === 'object') {
+      const obj = {};
+      for (const key of Object.keys(parsed)) {
+        const v = parsed[key];
+        if (v && typeof v === 'object' && v.calendarId) {
+          obj[key] = v.calendarId;
+        } else if (typeof v === 'string') {
+          obj[key] = v; // compat anterior { "Carlos": "calId" }
+        }
+      }
+      return obj;
+    }
+
+    return {};
   } catch (e) {
     logger.error?.('BARBERS_JSON_READ_ERROR', { message: e.message });
     return {};
   }
+}
+
+
+let businessHoursCache = null;
+
+function loadBusinessHours() {
+  if (businessHoursCache) return businessHoursCache;
+
+  try {
+    if (!fs.existsSync(BUSINESS_HOURS_JSON_PATH)) {
+      businessHoursCache = {};
+      return businessHoursCache;
+    }
+
+    const raw = fs.readFileSync(BUSINESS_HOURS_JSON_PATH, 'utf8').trim();
+    if (!raw) {
+      businessHoursCache = {};
+      return businessHoursCache;
+    }
+
+    const parsed = JSON.parse(raw);
+    businessHoursCache = parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) {
+    logger.error?.('BUSINESS_HOURS_READ_ERROR', { message: e.message });
+    businessHoursCache = {};
+  }
+
+  return businessHoursCache;
+}
+
+function normalizeBizConfig(cfg) {
+  const dayMap = {
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+    Sun: 7,
+  };
+
+  let days = [];
+
+  if (Array.isArray(cfg.days)) {
+    days = cfg.days
+      .map((d) => dayMap[d] || Number(d) || null)
+      .filter(Boolean);
+  }
+
+  if (!days.length) {
+    days = (process.env.BUSINESS_DAYS || '1,2,3,4,5')
+      .split(',')
+      .map((d) => Number(d.trim()))
+      .filter(Boolean);
+  }
+
+  return {
+    days,
+    start: cfg.start || process.env.BUSINESS_START || '08:00',
+    end: cfg.end || process.env.BUSINESS_END || '20:00',
+  };
+}
+
+function getBizFor(barber) {
+  const map = loadBusinessHours();
+
+  // 1) config específica por barbero
+  if (barber && map && map[barber]) {
+    return normalizeBizConfig(map[barber]);
+  }
+
+  // 2) config default del JSON
+  if (map && map.default) {
+    return normalizeBizConfig(map.default);
+  }
+
+  // 3) fallback por .env
+  const days = (process.env.BUSINESS_DAYS || '1,2,3,4,5')
+    .split(',')
+    .map((d) => Number(d.trim()))
+    .filter(Boolean);
+
+  return {
+    days,
+    start: process.env.BUSINESS_START || '08:00',
+    end: process.env.BUSINESS_END || '20:00',
+  };
+}
+
+
+function parseHm(hm) {
+  const [h, m] = String(hm || '').split(':').map(Number);
+  return { h: h || 0, m: m || 0 };
+}
+
+function dayIsOpen(dt, daysArr) {
+  // Luxon: Monday=1 ... Sunday=7
+  return daysArr.includes(dt.weekday);
+}
+
+function buildDayWindow(dayDt, startHm, endHm) {
+  const { h: sh, m: sm } = parseHm(startHm);
+  const { h: eh, m: em } = parseHm(endHm);
+
+  const start = dayDt.set({ hour: sh, minute: sm, second: 0, millisecond: 0 });
+  const end = dayDt.set({ hour: eh, minute: em, second: 0, millisecond: 0 });
+  return { start, end };
+}
+
+function clipInterval(interval, L, R) {
+  const s = interval.start < L ? L : interval.start;
+  const e = interval.end > R ? R : interval.end;
+  return s < e ? { start: s, end: e } : null;
+}
+
+function mergeIntervals(intervals) {
+  if (!intervals.length) return [];
+  const sorted = intervals.slice().sort((a, b) => a.start - b.start);
+  const out = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const cur = sorted[i];
+    const last = out[out.length - 1];
+    if (cur.start <= last.end) {
+      if (cur.end > last.end) last.end = cur.end;
+    } else {
+      out.push(cur);
+    }
+  }
+  return out;
+}
+
+function freeGaps(L, R, busy) {
+  const merged = mergeIntervals(busy);
+  const gaps = [];
+  let cursor = L;
+
+  for (const iv of merged) {
+    if (iv.start > cursor) {
+      gaps.push({ start: cursor, end: iv.start });
+    }
+    if (iv.end > cursor) {
+      cursor = iv.end;
+    }
+  }
+  if (cursor < R) {
+    gaps.push({ start: cursor, end: R });
+  }
+  return gaps;
+}
+
+function ceilToStep(dt, stepMin) {
+  const minute = dt.minute;
+  const remainder = minute % stepMin;
+  if (remainder === 0) {
+    return dt.set({ second: 0, millisecond: 0 });
+  }
+  const delta = stepMin - remainder;
+  return dt.plus({ minutes: delta }).set({ second: 0, millisecond: 0 });
+}
+
+function applyBuffer(busy, bufferMin) {
+  if (!bufferMin) return busy;
+  return busy.map((iv) => ({
+    start: iv.start.minus({ minutes: bufferMin }),
+    end: iv.end.plus({ minutes: bufferMin }),
+  }));
+}
+
+function genSlotsBackToBack(gaps, durationMin, now) {
+  const slots = [];
+  const step = durationMin;
+
+  for (const g of gaps) {
+    let start = g.start;
+
+    // Excluir pasado si el gap es del mismo día
+    if (now.hasSame(g.start, 'day') && start < now) {
+      start = now;
+    }
+
+    // Alinear a la rejilla
+    start = ceilToStep(start, step);
+
+    while (start.plus({ minutes: step }) <= g.end) {
+      const end = start.plus({ minutes: step });
+      slots.push({ start, end });
+      start = end; // back-to-back
+    }
+  }
+
+  return slots;
 }
 
 
@@ -210,6 +422,136 @@ async function cancelEvent(params) {
   }
 }
 
+async function checkAvailability(params) {
+  const { from, to, duration, buffer = 0, barber, calendarId: explicitCalId } = params || {};
+
+  if (!from || !to) {
+    const err = new Error('INVALID_RANGE: from y to son requeridos');
+    err.code = 'INVALID_RANGE';
+    throw err;
+  }
+
+  const fromDT = DateTime.fromISO(from, { zone: TZ });
+  const toDT = DateTime.fromISO(to, { zone: TZ });
+
+  if (!fromDT.isValid || !toDT.isValid || toDT <= fromDT) {
+    const err = new Error('INVALID_RANGE: rango inválido');
+    err.code = 'INVALID_RANGE';
+    throw err;
+  }
+
+  const durMin = Number.isFinite(Number(duration)) ? Number(duration) : DEFAULT_DURATION_MIN;
+  const bufferMin = Number(buffer) || 0;
+
+  const calId = resolveCalendarId({ calendarId: explicitCalId, barber });
+
+  // --------- Caché determinista ---------
+  const cacheKey = [
+    'calendar.check',
+    calId,
+    fromDT.toISO(),
+    toDT.toISO(),
+    durMin,
+    bufferMin,
+    barber || 'none',
+  ].join('|');
+
+  const cached = await Promise.resolve(cache.get(cacheKey));
+  if (cached) return cached;
+
+  // --------- Leer eventos ocupados reales ---------
+  const auth = getAuthClient();
+  const calendar = google.calendar({ version: 'v3', auth });
+
+  const eventsRes = await calendar.events.list({
+    calendarId: calId,
+    timeMin: fromDT.toISO(),
+    timeMax: toDT.toISO(),
+    singleEvents: true,
+    orderBy: 'startTime',
+    timeZone: TZ,
+  });
+
+  const items = eventsRes.data.items || [];
+  const busy = items
+    .map((ev) => {
+      const s = ev.start?.dateTime || ev.start?.date;
+      const e = ev.end?.dateTime || ev.end?.date;
+      if (!s || !e) return null;
+      return {
+        start: DateTime.fromISO(s, { zone: TZ }),
+        end: DateTime.fromISO(e, { zone: TZ }),
+      };
+    })
+    .filter(Boolean);
+
+  // --------- Business hours ---------
+  const bizCfg = getBizFor(barber);
+  const daysArr = bizCfg.days || [1, 2, 3, 4, 5];
+  const startHm = bizCfg.start || '08:00';
+  const endHm = bizCfg.end || '20:00';
+
+  const now = DateTime.now().setZone(TZ);
+  const slots = [];
+
+  // Recorremos día por día dentro del rango
+  let cursor = fromDT.startOf('day');
+  const lastDay = toDT.startOf('day');
+
+  while (cursor <= lastDay) {
+    if (!dayIsOpen(cursor, daysArr)) {
+      cursor = cursor.plus({ days: 1 });
+      continue;
+    }
+
+    const { start: dayStart, end: dayEnd } = buildDayWindow(cursor, startHm, endHm);
+
+    // Recortar al rango [fromDT, toDT]
+    const dayL = fromDT > dayStart ? fromDT : dayStart;
+    const dayR = toDT < dayEnd ? toDT : dayEnd;
+
+    if (dayL >= dayR) {
+      cursor = cursor.plus({ days: 1 });
+      continue;
+    }
+
+    const dayBusyRaw = busy
+      .map((iv) => clipInterval(iv, dayL, dayR))
+      .filter(Boolean);
+
+    const dayBusy = applyBuffer(dayBusyRaw, bufferMin);
+    const gaps = freeGaps(dayL, dayR, dayBusy);
+    const daySlots = genSlotsBackToBack(gaps, durMin, now);
+
+    for (const s of daySlots) {
+      slots.push({
+        start: toRFC3339(s.start),
+        end: toRFC3339(s.end),
+      });
+    }
+
+    cursor = cursor.plus({ days: 1 });
+  }
+
+  const result = {
+    slots,
+    generated_with: {
+      duration: durMin,
+      buffer: bufferMin,
+      tz: TZ,
+      business_hours: {
+        days: bizCfg.days || [1, 2, 3, 4, 5],
+        start: startHm,
+        end: endHm,
+      },
+    },
+  };
+
+  await Promise.resolve(cache.set(cacheKey, result, CACHE_TTL_SECONDS));
+  return result;
+}
+
+
 // -------------------- DISPATCHER --------------------
 export const name = 'calendar';
 export const actions = {
@@ -221,4 +563,9 @@ export const actions = {
     const data = await cancelEvent(params);
     return { ok: true, data };
   },
+  async check({ params }) {
+    const data = await checkAvailability(params);
+    return { ok: true, data };
+  },
 };
+
