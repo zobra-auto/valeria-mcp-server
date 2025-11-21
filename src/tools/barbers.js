@@ -47,10 +47,61 @@ function loadBarbers() {
 function normalize(str) {
   return String(str || '')
     .toLowerCase()
+    // quita caracteres de reemplazo '�' que aparecen por problemas de encoding
+    .replace(/\uFFFD/g, '')
     .normalize('NFD')          // quita tildes
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')      // colapsa espacios múltiples
     .trim();
 }
+/**
+ * Distancia de Levenshtein simple para permitir 1 error
+ */
+function levenshtein(a, b) {
+  const s = a || '';
+  const t = b || '';
+  const m = s.length;
+  const n = t.length;
+
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j];
+      if (s[i - 1] === t[j - 1]) {
+        dp[j] = prev;
+      } else {
+        dp[j] = Math.min(
+          prev + 1,   // sustitución
+          dp[j] + 1,  // borrado
+          dp[j - 1] + 1 // inserción
+        );
+      }
+      prev = temp;
+    }
+  }
+
+  return dp[n];
+}
+
+/**
+ * Comparación "suave": exacto, substring o distancia <= 1
+ */
+function looseMatch(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+
+  const dist = levenshtein(a, b);
+  return dist <= 1;
+}
+
 
 /**
  * Resolver barbero:
@@ -82,22 +133,23 @@ async function resolveBarber(params) {
   for (const barberId of Object.keys(barbers)) {
     const cfg = barbers[barberId];
 
-    const display = normalize(cfg.displayName);
+        const display = normalize(cfg.displayName);
     const aliases = Array.isArray(cfg.aliases)
       ? cfg.aliases.map((a) => normalize(a))
       : [];
 
-    // 1) displayName coincide EXACTO
-    if (inputN === display) {
+    // 1) displayName coincide (exacto o casi igual)
+    if (looseMatch(inputN, display)) {
       matches.push({ barber_id: barberId, displayName: cfg.displayName });
       continue;
     }
 
-    // 2) alias coincide
-    if (aliases.includes(inputN)) {
+    // 2) alias coincide (exacto o casi igual)
+    if (aliases.some((a) => looseMatch(inputN, a))) {
       matches.push({ barber_id: barberId, displayName: cfg.displayName });
       continue;
     }
+
 
     // 3) coincide con ID interno → error especial
     if (inputN === normalize(barberId)) {
