@@ -1,24 +1,37 @@
+// src/server.js
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
+
 import { config, barbers, businessHours } from './config.js';
 import { auth } from './middleware/auth.js';
 import { rateLimit } from './middleware/rate.js';
 import { mcpRouter } from './mcp/router.js';
 
+// Logger PRO
+import { createRequestLogger } from './utils/logger.js';
+
+const log = createRequestLogger({
+  tool: 'server',
+  action: 'start',
+});
+
+// Inicializa Express
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
-// health GET simple
-app.get('/health', (_, res) => res.json({ status: 'ok', env: config.env }));
+// Health simple
+app.get('/health', (_, res) =>
+  res.json({ status: 'ok', env: config.env })
+);
 
 // Aplica auth + rate limit al contrato MCP
 app.use('/mcp', auth, rateLimit, mcpRouter);
 app.use('/tools', auth, rateLimit, mcpRouter);
 
-// endpoint opcional para verificar carga de datos
+// Endpoint opcional para debug
 app.get('/_debug/config', auth, (req, res) => {
   res.json({
     status: 'ok',
@@ -30,8 +43,22 @@ app.get('/_debug/config', auth, (req, res) => {
   });
 });
 
-app.use((req, res) => res.status(404).json({ status: 'error', message: 'Ruta no encontrada' }));
+// 404
+app.use((req, res) =>
+  res.status(404).json({
+    status: 'error',
+    message: 'Ruta no encontrada',
+  })
+);
 
+// Start server con logger PRO 💥
 app.listen(config.port, () => {
-  console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg: 'server.started', port: config.port, tz: config.tz }));
+  log.info(
+    {
+      port: config.port,
+      tz: config.tz,
+      env: config.env,
+    },
+    'server.started'
+  );
 });
