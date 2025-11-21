@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { createLogger } from '../utils/logger.js';
+import { createRequestLogger } from '../utils/logger.js';
+const log = createRequestLogger({ tool: 'barbers', action: 'resolve' });
 
-const log = createLogger('barbers');
 
 const BARBERS_JSON_PATH =
   process.env.BARBERS_JSON || path.join(process.cwd(), 'data', 'barbers.json');
