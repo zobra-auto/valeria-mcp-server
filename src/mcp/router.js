@@ -27,7 +27,6 @@ const validate = ajv.compile(schema);
 
 const registry = {
   calendar,
-  notion_catalog: notion,
   docs,
   ver_disponibilidad: availability,
   notificador: notifier,
