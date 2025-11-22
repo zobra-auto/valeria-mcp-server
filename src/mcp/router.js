@@ -8,6 +8,8 @@ import * as notion from '../tools/notion_catalog.js';
 import * as docs from '../tools/docs.js';
 import * as availability from '../tools/availability.js';
 import * as notifier from '../tools/notifier.js';
+import * as catalog from '../tools/catalog.js'; 
+import * as booking from '../tools/booking.js';   
 import cache from '../utils/cache.js';
 import * as barbers from '../tools/barbers.js';
 
@@ -31,6 +33,8 @@ const registry = {
   ver_disponibilidad: availability,
   notificador: notifier,
   barbers,
+  catalog,
+  booking,
 };
 
 export const mcpRouter = express.Router();
