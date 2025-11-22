@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import { logger } from '../utils/logger.js';
 import { nowISO } from '../utils/time.js';
 import * as calendar from '../tools/calendar.js';
-import * as notion from '../tools/notion_catalog.js';
 import * as docs from '../tools/docs.js';
 import * as availability from '../tools/availability.js';
 import * as notifier from '../tools/notifier.js';
