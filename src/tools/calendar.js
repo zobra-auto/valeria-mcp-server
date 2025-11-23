@@ -59,6 +59,18 @@ function getAuthClient() {
 }
 
 // -------------------- HELPERS --------------------
+function normalizeName(str) {
+  if (!str) return '';
+  return str
+    .toString()
+    .toLowerCase()
+    .normalize('NFD')              // separa tildes
+    .replace(/[\u0300-\u036f]/g, '') // quita tildes
+    .replace(/\s+/g, ' ')         // colapsa espacios
+    .trim();
+}
+
+
 function loadBarbersMap() {
   try {
     if (!fs.existsSync(BARBERS_JSON_PATH)) return {};
@@ -66,24 +78,64 @@ function loadBarbersMap() {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
 
-    // 1) Formato array [{ name, calendarId }]
+    const obj = {};
+
+    // 1) Formato array [{ id/name, calendarId, aliases? }]
     if (Array.isArray(parsed)) {
-      const obj = {};
       for (const it of parsed) {
-        if (it && it.name && it.calendarId) obj[it.name] = it.calendarId;
+        if (!it) continue;
+        const calId = it.calendarId;
+        if (!calId) continue;
+
+        // id o name como clave técnica
+        const idKey = normalizeName(it.id || it.name);
+        if (idKey) obj[idKey] = calId;
+
+        // aliases como claves adicionales
+        if (Array.isArray(it.aliases)) {
+          for (const alias of it.aliases) {
+            const aKey = normalizeName(alias);
+            if (aKey) obj[aKey] = calId;
+          }
+        }
       }
       return obj;
     }
 
-    // 2) Formato objeto con calendarId dentro
+    // 2) Formato objeto { barberId: { displayName, aliases, calendarId } }
     if (parsed && typeof parsed === 'object') {
-      const obj = {};
       for (const key of Object.keys(parsed)) {
         const v = parsed[key];
-        if (v && typeof v === 'object' && v.calendarId) {
-          obj[key] = v.calendarId;
-        } else if (typeof v === 'string') {
-          obj[key] = v; // compat anterior { "Carlos": "calId" }
+        if (!v) continue;
+
+        // Compat anterior: { "Carlos": "calId" }
+        if (typeof v === 'string') {
+          const idKey = normalizeName(key);
+          if (idKey) obj[idKey] = v;
+          continue;
+        }
+
+        if (typeof v === 'object') {
+          const calId = v.calendarId;
+          if (!calId) continue;
+
+          // 2.1 ID interno (nova, atlas, etc.)
+          const idKey = normalizeName(key);
+          if (idKey) obj[idKey] = calId;
+
+          // 2.2 displayName visible ("Carlos")
+          if (v.displayName) {
+            const dnKey = normalizeName(v.displayName);
+            if (dnKey) obj[dnKey] = calId;
+          }
+
+          // 2.3 aliases ["carlos", "carlitos", "atlas"]
+          if (Array.isArray(v.aliases)) {
+            for (const alias of v.aliases) {
+              const aKey = normalizeName(alias);
+              if (aKey) obj[aKey] = calId;
+            }
+          }
         }
       }
       return obj;
@@ -95,6 +147,7 @@ function loadBarbersMap() {
     return {};
   }
 }
+
 
 
 let businessHoursCache = null;
@@ -295,18 +348,22 @@ function resolveCalendarId(params) {
 
   if (barber) {
     const map = loadBarbersMap();
-    if (!map[barber]) {
+    const key = normalizeName(barber);
+
+    if (!key || !map[key]) {
       const err = new Error(`BARBER_NOT_FOUND: ${barber}`);
       err.code = 'BARBER_NOT_FOUND';
       throw err;
     }
-    return map[barber];
+
+    return map[key];
   }
 
   const err = new Error('MISSING_CALENDAR: se requiere calendarId o barber');
   err.code = 'MISSING_CALENDAR';
   throw err;
 }
+
 
 function ensureFuture(whenISO) {
   const now = DateTime.now().setZone(TZ);
