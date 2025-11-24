@@ -608,8 +608,9 @@ async function cancelEvent(params) {
 }
 
 
+// --- REEMPLAZA TU FUNCIÓN checkAvailability ACTUAL POR ESTA ---
+
 async function checkAvailability(params) {
-  // 🔹 Logger hijo para esta operación
   const log = createRequestLogger({
     tool: 'calendar',
     action: 'check',
@@ -619,11 +620,21 @@ async function checkAvailability(params) {
   const startLog = Date.now();
   log.info({ params }, 'calendar.check → inicio');
 
-  const { from, to, duration, buffer = 0, barber, calendarId: explicitCalId } = params || {};
+  // ACEPTAMOS: from+to (ISO) O date (YYYY-MM-DD)
+  let { from, to, date, duration, buffer = 0, barber, calendarId: explicitCalId } = params || {};
 
-  // --------- Validación de rango ---------
+  // LÓGICA NUEVA: Si envían "date" simple, calculamos el rango del día completo
+  if (date && !from && !to) {
+     const dt = DateTime.fromISO(date, { zone: TZ });
+     if (dt.isValid) {
+       from = dt.startOf('day').toISO();
+       to = dt.endOf('day').toISO();
+     }
+  }
+
+  // Validación de rango
   if (!from || !to) {
-    const err = new Error('INVALID_RANGE: from y to son requeridos');
+    const err = new Error('INVALID_RANGE: Se requiere (from, to) O (date)');
     err.code = 'INVALID_RANGE';
     log.error({ err: { message: err.message, code: err.code } }, 'calendar.check → rango faltante');
     throw err;
@@ -635,43 +646,18 @@ async function checkAvailability(params) {
   if (!fromDT.isValid || !toDT.isValid || toDT <= fromDT) {
     const err = new Error('INVALID_RANGE: rango inválido');
     err.code = 'INVALID_RANGE';
-    log.error(
-      {
-        err: { message: err.message, code: err.code },
-        from,
-        to,
-      },
-      'calendar.check → rango inválido'
-    );
     throw err;
   }
 
   const durMin = Number.isFinite(Number(duration)) ? Number(duration) : DEFAULT_DURATION_MIN;
   const bufferMin = Number(buffer) || 0;
-
   const calId = resolveCalendarId({ calendarId: explicitCalId, barber });
-  log.info({ calId, durMin, bufferMin }, 'calendar.check → usando calendarId');
-
-  // --------- Caché determinista ---------
-  const cacheKey = [
-    'calendar.check',
-    calId,
-    fromDT.toISO(),
-    toDT.toISO(),
-    durMin,
-    bufferMin,
-    barber || 'none',
-  ].join('|');
-
+  
+  // Cache logic
+  const cacheKey = ['calendar.check', calId, fromDT.toISO(), toDT.toISO(), durMin, bufferMin, barber || 'none'].join('|');
   const cached = await Promise.resolve(cache.get(cacheKey));
-  if (cached) {
-    log.info({ cacheKey }, 'calendar.check → CACHE HIT');
-    return cached;
-  }
+  if (cached) return cached;
 
-  log.info({ cacheKey }, 'calendar.check → CACHE MISS');
-
-  // --------- Leer eventos ocupados reales ---------
   const auth = getAuthClient();
   const calendar = google.calendar({ version: 'v3', auth });
 
@@ -685,85 +671,53 @@ async function checkAvailability(params) {
   });
 
   const items = eventsRes.data.items || [];
-  const busy = items
-    .map((ev) => {
+  const busy = items.map((ev) => {
       const s = ev.start?.dateTime || ev.start?.date;
       const e = ev.end?.dateTime || ev.end?.date;
       if (!s || !e) return null;
-      return {
-        start: DateTime.fromISO(s, { zone: TZ }),
-        end: DateTime.fromISO(e, { zone: TZ }),
-      };
-    })
-    .filter(Boolean);
+      return { start: DateTime.fromISO(s, { zone: TZ }), end: DateTime.fromISO(e, { zone: TZ }) };
+    }).filter(Boolean);
 
-  log.info({ busy_count: busy.length }, 'calendar.check → eventos ocupados obtenidos');
-
-  // --------- Business hours ---------
   const bizCfg = getBizFor(barber);
   const daysArr = bizCfg.days || [1, 2, 3, 4, 5];
   const startHm = bizCfg.start || '08:00';
   const endHm = bizCfg.end || '20:00';
-
   const now = DateTime.now().setZone(TZ);
   const slots = [];
 
-  // Recorremos día por día dentro del rango
   let cursor = fromDT.startOf('day');
   const lastDay = toDT.startOf('day');
 
   while (cursor <= lastDay) {
-    if (!dayIsOpen(cursor, daysArr)) {
-      cursor = cursor.plus({ days: 1 });
-      continue;
-    }
-
+    if (!dayIsOpen(cursor, daysArr)) { cursor = cursor.plus({ days: 1 }); continue; }
     const { start: dayStart, end: dayEnd } = buildDayWindow(cursor, startHm, endHm);
-
-    // Recortar al rango [fromDT, toDT]
+    // Recorte al rango solicitado
     const dayL = fromDT > dayStart ? fromDT : dayStart;
     const dayR = toDT < dayEnd ? toDT : dayEnd;
 
-    if (dayL >= dayR) {
-      cursor = cursor.plus({ days: 1 });
-      continue;
-    }
+    if (dayL >= dayR) { cursor = cursor.plus({ days: 1 }); continue; }
 
-    const dayBusyRaw = busy
-      .map((iv) => clipInterval(iv, dayL, dayR))
-      .filter(Boolean);
-
+    const dayBusyRaw = busy.map((iv) => clipInterval(iv, dayL, dayR)).filter(Boolean);
     const dayBusy = applyBuffer(dayBusyRaw, bufferMin);
     const gaps = freeGaps(dayL, dayR, dayBusy);
     const daySlots = genSlotsBackToBack(gaps, durMin, now);
 
     for (const s of daySlots) {
-      slots.push({
-        start: toRFC3339(s.start),
-        end: toRFC3339(s.end),
-      });
+      slots.push({ start: toRFC3339(s.start), end: toRFC3339(s.end) });
     }
-
     cursor = cursor.plus({ days: 1 });
   }
 
   const result = {
     slots,
     generated_with: {
-      duration: durMin,
-      buffer: bufferMin,
-      tz: TZ,
-      business_hours: {
-        days: bizCfg.days || [1, 2, 3, 4, 5],
-        start: startHm,
-        end: endHm,
-      },
+      duration: durMin, buffer: bufferMin, tz: TZ,
+      business_hours: { days: bizCfg.days, start: startHm, end: endHm },
     },
   };
 
   await Promise.resolve(cache.set(cacheKey, result, CACHE_TTL_SECONDS));
   logWithDuration(log, 'calendar.check → completado', { slots: result.slots.length }, startLog);
-
   return result;
 }
 
