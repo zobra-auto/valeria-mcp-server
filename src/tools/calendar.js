@@ -364,6 +364,39 @@ function resolveCalendarId(params) {
   throw err;
 }
 
+function buildWhenISO({ when, date, time }) {
+  // Si ya viene un ISO completo → lo usamos tal cual
+  if (when) return when;
+
+  // Si vienen date + time → construimos el ISO en zona Bogotá
+  if (date && time) {
+    const [hStr, mStr] = String(time).split(':');
+    const hour = Number(hStr) || 0;
+    const minute = Number(mStr) || 0;
+
+    const base = DateTime.fromISO(date, { zone: TZ });
+    if (!base.isValid) {
+      const err = new Error(`INVALID_WHEN: fecha inválida ${date}`);
+      err.code = 'INVALID_WHEN';
+      throw err;
+    }
+
+    const dt = base.set({ hour, minute, second: 0, millisecond: 0 });
+    if (!dt.isValid) {
+      const err = new Error(`INVALID_WHEN: combinación inválida date+time (${date} ${time})`);
+      err.code = 'INVALID_WHEN';
+      throw err;
+    }
+
+    // Devolvemos ISO con offset correcto de la zona (America/Bogota)
+    return dt.toISO({ suppressMilliseconds: true });
+  }
+
+  const err = new Error('INVALID_WHEN: se requiere when o (date + time)');
+  err.code = 'INVALID_WHEN';
+  throw err;
+}
+
 
 function ensureFuture(whenISO) {
   const now = DateTime.now().setZone(TZ);
@@ -405,20 +438,45 @@ async function createEvent(params) {
   const startLog = Date.now();
   log.info({ params }, 'calendar.create → inicio');
 
-  const { when, who, notes = '', duration, barber, calendarId: explicitCalId, client_request_id } = params || {};
+  const {
+    when,       // ISO completo (opcional)
+    date,       // YYYY-MM-DD (opcional)
+    time,       // HH:MM (opcional)
+    who,
+    notes = '',
+    duration,
+    barber,
+    phone,      // NUEVO
+    clientId,   // NUEVO
+    calendarId: explicitCalId,
+    client_request_id,
+  } = params || {};
 
-  if (!when) throw new Error('Missing param: when');
+
   if (!who) throw new Error('Missing param: who');
 
+  // Construimos un ISO robusto a partir de when o (date+time)
+  const whenISO = buildWhenISO({ when, date, time });
+
   const calId = resolveCalendarId({ calendarId: explicitCalId, barber });
-  log.info({ calId }, 'calendar.create → usando calendarId');
+  log.info({ calId, whenISO }, 'calendar.create → usando calendarId y whenISO');
 
   const durMin = Number.isFinite(Number(duration)) ? Number(duration) : DEFAULT_DURATION_MIN;
 
-  const startDT = ensureFuture(when);
+  // Validamos que esté en el futuro
+  const startDT = ensureFuture(whenISO);
+
   const endDT = startDT.plus({ minutes: durMin });
   const summary = `Cita con ${who}`;
-  const description = notes || '';
+
+  // Descripción enriquecida para booking.search
+  const descriptionParts = [];
+  if (phone) descriptionParts.push(`Tel: ${phone}`);
+  if (clientId) descriptionParts.push(`ID: ${clientId}`);
+  if (notes) descriptionParts.push(`Notas: ${notes}`);
+
+  const description = descriptionParts.join('\n');
+
 
   const exec = async () => {
     return await timeAsync(log, 'Google Calendar → insert event', async () => {
