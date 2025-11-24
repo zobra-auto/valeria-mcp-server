@@ -168,6 +168,7 @@ mcpRouter.post('/', async (req, res) => {
     const mappedStatus =
       err.code === 'GOOGLE_403_FORBIDDEN' ? 403 :
       err.code === 'EVENT_NOT_FOUND' || err.code === 'BARBER_NOT_FOUND' || err.code === 'CATALOG_NOT_FOUND' ? 404 :
+      err.code === 'SLOT_OCCUPIED' ? 409 :
       err.code === 'INVALID_RANGE' || err.code === 'IN_PAST' || err.code === 'INVALID_WHEN' || err.code === 'MISSING_CALENDAR' ? 400 :
       500;
 

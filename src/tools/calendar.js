@@ -478,11 +478,43 @@ async function createEvent(params) {
   const description = descriptionParts.join('\n');
 
 
+  // --- INICIO DEL REEMPLAZO ---
   const exec = async () => {
-    return await timeAsync(log, 'Google Calendar → insert event', async () => {
-      const auth = getAuthClient();
-      const calendar = google.calendar({ version: 'v3', auth });
+    // 1. INSTANCIAR CLIENTE (Lo sacamos del timeAsync para usarlo en la verificación previa)
+    const auth = getAuthClient();
+    const calendar = google.calendar({ version: 'v3', auth });
 
+    // 2. VERIFICAR CONFLICTOS (Lógica NUEVA de seguridad)
+    // Consultamos a Google si ya existen eventos en ese rango exacto de tiempo
+    const conflictRes = await calendar.events.list({
+      calendarId: calId,
+      timeMin: toRFC3339(startDT),
+      timeMax: toRFC3339(endDT),
+      singleEvents: true,
+      timeZone: TZ
+    });
+
+    // Filtramos los eventos que realmente chocan (superposición estricta)
+    const conflicts = (conflictRes.data.items || []).filter(ev => {
+      // Si el evento es "transparente" (marcado como disponible), no bloquea.
+      if (ev.transparency === 'transparent') return false;
+      
+      const s = DateTime.fromISO(ev.start.dateTime || ev.start.date, { zone: TZ });
+      const e = DateTime.fromISO(ev.end.dateTime || ev.end.date, { zone: TZ });
+      
+      // Fórmula matemática de superposición: (InicioNuevo < FinExistente) Y (FinNuevo > InicioExistente)
+      return (startDT < e) && (endDT > s);
+    });
+
+    // Si encontramos al menos un conflicto, lanzamos ERROR y detenemos todo.
+    if (conflicts.length > 0) {
+      const err = new Error('SLOT_OCCUPIED: El horario seleccionado ya está ocupado.');
+      err.code = 'SLOT_OCCUPIED';
+      throw err;
+    }
+
+    // 3. INSERTAR EL EVENTO (Solo si pasamos la verificación anterior)
+    return await timeAsync(log, 'Google Calendar → insert event', async () => {
       const res = await calendar.events.insert({
         calendarId: calId,
         requestBody: {
@@ -504,6 +536,7 @@ async function createEvent(params) {
       };
     });
   };
+  // --- FIN DEL REEMPLAZO ---
 
   try {
     const result = client_request_id
