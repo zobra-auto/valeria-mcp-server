@@ -205,17 +205,6 @@ const results = match
       barberosStr.includes(query);
   }
 
-  const results = match
-    ? [
-        {
-          id: shop.id,
-          nombre: shop.nombre,
-          servicios: nombresServicios,
-          ciudad: shop.ciudad,
-        },
-      ]
-    : [];
-
   logWithDuration(
     log,
     'catalog.search → completado',
