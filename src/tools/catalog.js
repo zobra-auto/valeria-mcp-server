@@ -1,5 +1,3 @@
-log.info({ marker: 'CATALOG_V_2026_02_22_A' }, 'catalog.search.marker');
-
 // src/tools/catalog.js
 import fs from 'fs';
 import path from 'path';
