@@ -204,7 +204,7 @@ const results = match
       serviciosStr.includes(query) ||
       barberosStr.includes(query);
   }
-
+.
   logWithDuration(
     log,
     'catalog.search → completado',
