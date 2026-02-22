@@ -156,41 +156,7 @@ async function catalogSearch(params = {}) {
   const nombresServicios = shop.servicios.map((s) => s.nombre);
   const nombresBarberos = shop.barberos.map((b) => b.nombre);
 
-  const servicios_detalle = shop.servicios.map((s) => ({
-  id: s.id,
-  nombre: s.nombre,
-  precio: s.precio,
-  duracion_min: s.duracion_min,
-}));
-
-const barberos_detalle = shop.barberos.map((b) => ({
-  barber_id: b.barber_id,
-  nombre: b.nombre,
-  aliases: b.aliases || [],
-  // opcional si luego lo agregas a barbers.json:
-  especialidades: b.especialidades || [],
-  bio: b.bio || '',
-}));
-
-// ...y cambia results a:
-const results = match
-  ? [
-      {
-        id: shop.id,
-        nombre: shop.nombre,
-        ciudad: shop.ciudad,
-
-        // lo que ya devolvías:
-        servicios: nombresServicios,
-
-        // ✅ nuevo:
-        barberos: nombresBarberos,
-        servicios_detalle,
-        barberos_detalle,
-      },
-    ]
-  : [];
-
+  // ✅ Primero calculas match (antes de usarlo)
   let match = true;
   if (query) {
     const nombre = normalize(shop.nombre);
@@ -204,7 +170,43 @@ const results = match
       serviciosStr.includes(query) ||
       barberosStr.includes(query);
   }
-.
+
+  // Detalles (ok)
+  const servicios_detalle = shop.servicios.map((s) => ({
+    id: s.id,
+    nombre: s.nombre,
+    precio: s.precio,
+    duracion_min: s.duracion_min,
+    descripcion: s.descripcion || '',
+  }));
+
+  const barberos_detalle = shop.barberos.map((b) => ({
+    barber_id: b.barber_id,
+    nombre: b.nombre,
+    aliases: b.aliases || [],
+    especialidades: b.especialidades || [],
+    bio: b.bio || '',
+  }));
+
+  // ✅ Ahora sí construyes results usando match
+  const results = match
+    ? [
+        {
+          id: shop.id,
+          nombre: shop.nombre,
+          ciudad: shop.ciudad,
+
+          // compat
+          servicios: nombresServicios,
+
+          // nuevo
+          barberos: nombresBarberos,
+          servicios_detalle,
+          barberos_detalle,
+        },
+      ]
+    : [];
+
   logWithDuration(
     log,
     'catalog.search → completado',
